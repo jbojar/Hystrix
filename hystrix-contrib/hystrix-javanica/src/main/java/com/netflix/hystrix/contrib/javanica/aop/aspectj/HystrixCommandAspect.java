@@ -35,6 +35,8 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Pointcut;
 import org.aspectj.lang.reflect.MethodSignature;
+import rx.Observable;
+import rx.functions.Func1;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
@@ -85,13 +87,31 @@ public class HystrixCommandAspect {
         HystrixInvokable invokable = HystrixCommandFactory.getInstance().create(metaHolder);
         ExecutionType executionType = metaHolder.isCollapserAnnotationPresent() ?
                 metaHolder.getCollapserExecutionType() : metaHolder.getExecutionType();
+
         Object result;
         try {
-            result = CommandExecutor.execute(invokable, executionType, metaHolder);
+            if (!metaHolder.isObservable()) {
+                result = CommandExecutor.execute(invokable, executionType, metaHolder);
+            } else {
+                result = executeObservable(invokable, executionType, metaHolder);
+            }
         } catch (HystrixBadRequestException e) {
             throw e.getCause();
         }
         return result;
+    }
+
+    private Observable executeObservable(HystrixInvokable invokable, ExecutionType executionType, MetaHolder metaHolder) {
+        return ((Observable) CommandExecutor.execute(invokable, executionType, metaHolder))
+                .onErrorResumeNext(new Func1<Throwable, Observable>() {
+                    @Override
+                    public Observable call(Throwable throwable) {
+                        if (throwable instanceof HystrixBadRequestException) {
+                            return Observable.error(throwable.getCause());
+                        }
+                        return Observable.error(throwable);
+                    }
+                });
     }
 
     /**
